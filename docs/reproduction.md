@@ -35,21 +35,13 @@ python scripts/cli.py preprocess --task synapse --stage both
 python scripts/cli.py materialize --task synapse --model unetrpp --phase all
 ```
 
-## 6. Pretrain (EMA hard-token feature reconstruction, v5 default)
+## 6. Pretrain (EMA hard-token feature reconstruction)
 
 ```bash
 python scripts/cli.py run pretrain --task synapse --model unetrpp
 ```
 
-Checkpoint: `outputs/pretrain/synapse_v5_adaptive/best.pt` (+ `.meta.json` sidecar).
-
-Paper baseline (stage 2/3/4, top-k mining):
-
-```bash
-python scripts/cli.py run pretrain --task synapse --model unetrpp --recipe v4
-```
-
-Checkpoint: `outputs/pretrain/synapse_stage234/best.pt`.
+Checkpoint: `outputs/pretrain/synapse/best.pt` (+ `.meta.json` sidecar).
 
 ## 7. 5-fold finetune
 
@@ -69,23 +61,25 @@ python scripts/cli.py run finetune --task synapse --model unetrpp --method ours 
 
 ```bash
 python scripts/cli.py run eval --task synapse --model unetrpp --method ours \
-  --checkpoint outputs/downstream/synapse/ours_v5/fold_0/best_model.pt \
+  --checkpoint outputs/downstream/synapse/ours/fold_0/best_model.pt \
   --fold all --official
 ```
 
 Eval refuses checkpoints whose embedded metadata does not match the Synapse task (no cross-dataset eval).
 
-## Hyperparameters
+## 9. Optional 5-fold ensemble eval
 
-Defaults (v5 recipe):
+```bash
+bash scripts/run_synapse_5fold_ensemble_eval.sh ours 0,1,2,3,4 0.625
+```
+
+## Hyperparameters
 
 | Stage | Key settings |
 |-------|----------------|
 | Pretrain | 100 epochs, error_mass mining, AAMM masking, boundary preset, cosine λ |
-| Finetune | 400 samples/epoch, dice_ce_boundary, poly LR, early stop patience 150 (min 400 ep) |
+| Finetune | 400 samples/epoch, dice_ce_boundary (ours), poly LR, early stop patience 150 (min 400 ep) |
 | Eval | ROI 64×128×128, overlap 0.5, 8-organ Dice+HD95 |
-
-Paper baseline (`--recipe v4`): 50-epoch pretrain, top-k hard tokens, stages 2/3/4, dice_ce downstream.
 
 ## Citation
 

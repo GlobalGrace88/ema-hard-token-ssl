@@ -1,11 +1,11 @@
-# v5 downstream template — boundary-aware loss + v5 SSL init
+# Scratch downstream template — materialize_configs.py fills {fold}, {method}
 experiment:
-  name: unetrpp_synapse_{method}_v5_fold{fold}_s400
+  name: unetrpp_synapse_{method}_fold{fold}_s400
   modality: ct
   task: segmentation
   init_type: {method}
   dataset: synapse
-  ssl_pretrain: feature_recon_v5_adaptive_boundary_public_ct_5000
+  ssl_pretrain: none
 
 data:
   loader: nnformer_npz
@@ -58,12 +58,10 @@ model:
   strict_load: false
 
 loss:
-  name: dice_ce_boundary
+  name: dice_ce
   include_background: false
   to_onehot_y: true
   softmax: true
-  boundary_weight: 0.15
-  boundary_dilate: 1
 
 distributed:
   enabled: auto
@@ -119,4 +117,4 @@ eval_vis:
     connectivity: 26
 
 output:
-  dir: ${output_root}/downstream/synapse/{method}_v5/fold_{fold}
+  dir: ${output_root}/downstream/synapse/{method}/fold_{fold}

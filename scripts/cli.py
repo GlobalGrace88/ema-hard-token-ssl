@@ -35,14 +35,6 @@ def _run_script(script: str, args: List[str]) -> int:
     return subprocess.call(cmd)
 
 
-def _materialize(task: str, model: str, phase: str, method: str, folds: List[int]) -> None:
-    for fold in folds:
-        args = ["--task", task, "--model", model, "--phase", phase]
-        if phase != "pretrain":
-            args.extend(["--method", method, "--fold", str(fold)])
-        _run_script("materialize_configs.py", args)
-
-
 def cmd_preprocess(args: argparse.Namespace) -> int:
     stages = ["upstream", "downstream"] if args.stage == "both" else [args.stage]
     rc = 0
@@ -61,22 +53,11 @@ def cmd_preprocess(args: argparse.Namespace) -> int:
 
 def cmd_run_pretrain(args: argparse.Namespace) -> int:
     model = args.model or default_model(load_task(args.task))
-    recipe = getattr(args, "recipe", "v5")
-    suffix = "_v4" if recipe == "v4" else ""
-    cfg_path = repo_root() / "configs" / "generated" / args.task / f"pretrain_{model}{suffix}.yaml"
+    cfg_path = repo_root() / "configs" / "generated" / args.task / f"pretrain_{model}.yaml"
     if not cfg_path.is_file():
         _run_script(
             "materialize_configs.py",
-            [
-                "--task",
-                args.task,
-                "--model",
-                model,
-                "--phase",
-                "pretrain",
-                "--recipe",
-                recipe,
-            ],
+            ["--task", args.task, "--model", model, "--phase", "pretrain"],
         )
     extra = []
     if args.epochs is not None:
@@ -90,7 +71,6 @@ def cmd_run_pretrain(args: argparse.Namespace) -> int:
 def cmd_run_finetune(args: argparse.Namespace) -> int:
     model = args.model or default_model(load_task(args.task))
     folds = _resolve_folds(args.task, args.fold)
-    suffix = "_v4" if getattr(args, "recipe", "v5") == "v4" else ""
     rc = 0
     for fold in folds:
         cfg_path = (
@@ -99,7 +79,7 @@ def cmd_run_finetune(args: argparse.Namespace) -> int:
             / "generated"
             / args.task
             / "finetune"
-            / f"{model}_{args.method}{suffix}_fold{fold}.yaml"
+            / f"{model}_{args.method}_fold{fold}.yaml"
         )
         if not cfg_path.is_file():
             _run_script(
@@ -115,8 +95,6 @@ def cmd_run_finetune(args: argparse.Namespace) -> int:
                     args.method,
                     "--fold",
                     str(fold),
-                    "--recipe",
-                    args.recipe,
                 ],
             )
         rc = max(rc, _run_script("finetune_mri_segmentation.py", ["--config", str(cfg_path)]))
@@ -190,7 +168,6 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--task", default="synapse")
     pt.add_argument("--model", default=None)
     pt.add_argument("--epochs", type=int, default=None)
-    pt.add_argument("--recipe", choices=["v4", "v5"], default="v5")
     pt.set_defaults(func=cmd_run_pretrain)
 
     pf = pr_sub.add_parser("finetune")
@@ -198,7 +175,6 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--model", default=None)
     pf.add_argument("--method", choices=["scratch", "ours"], required=True)
     pf.add_argument("--fold", default="all", help="Fold index or 'all'")
-    pf.add_argument("--recipe", choices=["v4", "v5"], default="v5")
     pf.set_defaults(func=cmd_run_finetune)
 
     pe = pr_sub.add_parser("eval")
@@ -216,10 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--phase", choices=["pretrain", "finetune", "eval", "all"], default="all")
     mc.add_argument("--method", choices=["scratch", "ours", "both"], default="both")
     mc.add_argument("--fold", type=int, default=None)
-    mc.add_argument("--recipe", choices=["v4", "v5"], default="v5")
 
     def _cmd_materialize(a: argparse.Namespace) -> int:
-        args_list = ["--task", a.task, "--model", a.model, "--phase", a.phase, "--method", a.method, "--recipe", a.recipe]
+        args_list = ["--task", a.task, "--model", a.model, "--phase", a.phase, "--method", a.method]
         if a.fold is not None:
             args_list.extend(["--fold", str(a.fold)])
         return _run_script("materialize_configs.py", args_list)

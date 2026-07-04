@@ -5,20 +5,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 METHOD="${1:-ours}"
-RECIPE="${2:-v5}"
-FOLDS="${3:-0,1,2,3,4}"
-OVERLAP="${4:-0.625}"
+FOLDS="${2:-0,1,2,3,4}"
+OVERLAP="${3:-0.625}"
 
-if [[ "$METHOD" == "scratch" ]]; then
-  CKPT_DIR="outputs/downstream/synapse/scratch"
-  CFG_METHOD="scratch"
-elif [[ "$RECIPE" == "v5" ]]; then
-  CKPT_DIR="outputs/downstream/synapse/ours_v5"
-  CFG_METHOD="ours"
-else
-  CKPT_DIR="outputs/downstream/synapse/ours"
-  CFG_METHOD="ours"
-fi
+CKPT_DIR="outputs/downstream/synapse/${METHOD}"
 
 IFS=',' read -ra FOLD_ARR <<< "$FOLDS"
 CKPTS=()
@@ -31,13 +21,13 @@ for f in "${FOLD_ARR[@]}"; do
   CKPTS+=("$p")
 done
 
-CFG="configs/generated/synapse/eval/unetrpp_${CFG_METHOD}_fold0_official.yaml"
+CFG="configs/generated/synapse/eval/unetrpp_${METHOD}_fold0_official.yaml"
 if [[ ! -f "$CFG" ]]; then
-  python scripts/materialize_configs.py --task synapse --phase eval --method "$CFG_METHOD" --fold 0 --recipe "$RECIPE"
+  python scripts/materialize_configs.py --task synapse --phase eval --method "$METHOD" --fold 0
 fi
 
 LIST=$(IFS=,; echo "${CKPTS[*]}")
-OUT="outputs/eval/synapse/5fold_ensemble/${METHOD}_${RECIPE}/overlap_${OVERLAP}"
+OUT="outputs/eval/synapse/5fold_ensemble/${METHOD}/overlap_${OVERLAP}"
 
 python scripts/eval.py \
   --config "$CFG" \

@@ -5,7 +5,7 @@ experiment:
   task: segmentation
   init_type: {method}
   dataset: synapse
-  ssl_pretrain: feature_recon_v4_hard_stage234_smoothl1_public_ct_5000
+  ssl_pretrain: feature_recon_adaptive_boundary_public_ct_5000
 
 data:
   loader: nnformer_npz
@@ -58,10 +58,12 @@ model:
   strict_load: false
 
 loss:
-  name: dice_ce
+  name: dice_ce_boundary
   include_background: false
   to_onehot_y: true
   softmax: true
+  boundary_weight: 0.15
+  boundary_dilate: 1
 
 distributed:
   enabled: auto

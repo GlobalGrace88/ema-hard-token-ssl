@@ -24,10 +24,11 @@ python scripts/cli.py run pretrain --task synapse --model unetrpp
 python scripts/cli.py run finetune --task synapse --model unetrpp --method ours --fold all
 
 # 6. Official eval
-python scripts/cli.py run eval --task synapse --checkpoint outputs/downstream/synapse/ours_v5/fold_0/best_model.pt --fold all --official
-```
+python scripts/cli.py run eval --task synapse --checkpoint outputs/downstream/synapse/ours/fold_0/best_model.pt --fold all --official
 
-Paper baseline (v4 stage-2/3/4 recipe): add `--recipe v4` to pretrain/finetune commands.
+# 7. Optional 5-fold ensemble eval (after all folds trained)
+bash scripts/run_synapse_5fold_ensemble_eval.sh ours 0,1,2,3,4 0.625
+```
 
 ## CLI reference
 
@@ -70,7 +71,7 @@ Pretrain and finetune checkpoints embed `release_metadata` (JSON sidecar `.pt.me
 - [datasets.md](docs/datasets.md) — upstream FLARE+AMOS, downstream Synapse
 - [reproduction.md](docs/reproduction.md) — full paper reproduction steps
 - [setup_unetrpp.md](docs/setup_unetrpp.md) — clone official UNETR++
-- [PERFORMANCE_IMPROVEMENTS.md](docs/PERFORMANCE_IMPROVEMENTS.md) — default v5 recipe; `--recipe v4` for paper baseline
+- [training.md](docs/training.md) — SSL pretrain and downstream training details
 
 ## Citation
 

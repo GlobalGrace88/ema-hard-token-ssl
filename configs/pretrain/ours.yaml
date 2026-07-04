@@ -1,10 +1,10 @@
 experiment:
-  name: synapse_stage234_pretrain
+  name: synapse_pretrain
   modality: ct
   task: ssl_pretraining
   method: inpainting_feature_reconstruction
   seed: 42
-  output_dir: ${output_root}/pretrain/synapse_stage234
+  output_dir: ${output_root}/pretrain/synapse
   upstream_dataset: public_ct_ssl
   dataset: synapse
 
@@ -37,35 +37,51 @@ model:
     do_ds: false
 
 inpainting:
+  mask_strategy: aamm
   mask_ratio: 0.75
   patch_size: 16
   reconstruct_only_masked: true
   loss: l1
+  hybrid_uniform_mix: 0.15
+  masking:
+    use_foreground_prior: true
+    use_boundary_prior: true
+    use_distance_map: true
+    zone_probs:
+      interior: 0.55
+      boundary: 0.90
+      context: 0.25
 
 feature_reconstruction:
   enabled: true
-  version: v4_hard_stage234_smoothl1
-  stages: [2, 3, 4]
+  version: adaptive_boundary
+  objective_preset: boundary
   loss: hard_cosine_smoothl1
   masked_tokens_only: true
   predictor_hidden_dim: 512
   lambda_feature: 0.05
+  lambda_feature_schedule: cosine
+  lambda_feature_final: 0.04
   lambda_feature_warmup_epochs: 10
   warmup_epochs: 10
   teacher_momentum_base: 0.996
   teacher_momentum_final: 1.0
-  stage_weights:
-    stage2: 0.2
-    stage3: 0.3
-    stage4: 0.5
   token_mask_mode: any
   hard_token_mining:
     enabled: true
-    mode: topk_error
+    mode: error_mass
+    error_mass_fraction: 0.65
     topk_ratio: 0.5
     min_tokens: 8
     detach_weights: true
     apply_per_stage: true
+    curriculum_epochs: 15
+    curriculum_topk_start: 0.80
+    curriculum_error_mass_start: 0.80
+    error_mass_fraction_per_stage:
+      stage2: 0.60
+      stage3: 0.65
+      stage4: 0.70
   feature_loss:
     cosine_weight: 1.0
     smooth_l1_weight: 0.25
@@ -80,7 +96,7 @@ distributed:
 training:
   batch_size: 2
   grad_accum_steps: 1
-  epochs: 50
+  epochs: 100
   lr: 0.0001
   min_lr: 1.0e-06
   weight_decay: 0.04

@@ -17,19 +17,11 @@ default_model: unetrpp
 folds: [0, 1, 2, 3, 4]
 
 pretrain:
-  template: configs/pretrain/ours_v5_adaptive.yaml
-  output_subdir: pretrain/synapse_v5_adaptive
-
-pretrain_v4:
-  template: configs/pretrain/ours_stage234.yaml
-  output_subdir: pretrain/synapse_stage234
+  template: configs/pretrain/ours.yaml
+  output_subdir: pretrain/synapse
 
 downstream_templates:
-  scratch: configs/downstream/synapse_5fold.yaml
-  ours: configs/downstream/synapse_5fold_v5.yaml
-
-downstream_templates_v4:
-  scratch: configs/downstream/synapse_5fold.yaml
+  scratch: configs/downstream/synapse_5fold_scratch.yaml
   ours: configs/downstream/synapse_5fold.yaml
 
 eval:
