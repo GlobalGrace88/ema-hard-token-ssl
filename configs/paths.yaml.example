@@ -1,0 +1,6 @@
+# Copy to configs/paths.yaml or repo-root paths.yaml
+data_root: /path/to/data
+nnformer_dir: /path/to/nnformer
+ssl_ct_root: /path/to/DATASET_SSL_CT
+unetr_pp_root: /path/to/unetr_plus_plus-main
+output_root: outputs

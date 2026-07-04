@@ -1,0 +1,45 @@
+# Public 3D CT datasets for SSL pretraining (FLARE + AMOS for Synapse paper reproduction).
+root: ${ssl_ct_root}
+
+datasets:
+  amos:
+    enabled: true
+    manual_required: true
+    ct_only: true
+    local_archives: []
+    local_root: null
+    image_globs:
+      - "**/imagesTr/*.nii.gz"
+      - "**/imagesVa/*.nii.gz"
+    label_globs:
+      - "**/labelsTr/*.nii.gz"
+  flare:
+    enabled: true
+    manual_required: true
+    local_archives: []
+    local_root: null
+    image_globs:
+      - "**/imagesTr/*.nii.gz"
+      - "**/unlabeled*.nii.gz"
+    label_globs:
+      - "**/labelsTr/*.nii.gz"
+  totalsegmentator:
+    enabled: false
+  msd:
+    enabled: false
+  abdomenct1k:
+    enabled: false
+
+preprocess:
+  output_spacing: null
+  reorient_to_ras: true
+  ct_clip_min: -175
+  ct_clip_max: 250
+  normalize: "zero_mean_unit_std_after_clip"
+  min_foreground_voxels: 0
+  workers: 4
+
+manifest:
+  include_datasets: [amos, flare]
+  require_labels: false
+  dedupe_by_patient: true

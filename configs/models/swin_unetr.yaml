@@ -1,0 +1,9 @@
+architecture: swinunetr
+preferred_source: monai
+spatial_dims: 3
+is_3d: true
+in_channels: 1
+feature_size: 48
+swinunetr:
+  feature_size: 48
+  use_checkpoint: false

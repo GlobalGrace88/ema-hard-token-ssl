@@ -1,0 +1,28 @@
+# Synapse Tier-1 task bundle (upstream SSL + downstream nnFormer Task002)
+name: synapse
+description: FLARE+AMOS upstream SSL pretrain, Synapse 5-fold downstream segmentation
+
+upstream:
+  dataset: public_ct_ssl
+  manifest_csv: ${ssl_manifest_csv}
+  prepare_config: configs/datasets/public_ct_ssl.yaml
+
+downstream:
+  dataset: synapse
+  nnformer_task: Task002_Synapse
+  nnformer_preprocessed_dir: ${synapse_task_dir}
+  splits_pkl: ${synapse_task_dir}/splits_final.pkl
+
+default_model: unetrpp
+folds: [0, 1, 2, 3, 4]
+
+pretrain:
+  template: configs/pretrain/ours_stage234.yaml
+  output_subdir: pretrain/synapse_stage234
+
+downstream_templates:
+  scratch: configs/downstream/synapse_5fold.yaml
+  ours: configs/downstream/synapse_5fold.yaml
+
+eval:
+  official_overlap: 0.5

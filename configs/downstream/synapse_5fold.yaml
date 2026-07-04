@@ -1,0 +1,120 @@
+# Template — materialize_configs.py fills {fold}, {method}, {pretrain_ckpt}
+experiment:
+  name: unetrpp_synapse_{method}_fold{fold}_s400
+  modality: ct
+  task: segmentation
+  init_type: {method}
+  dataset: synapse
+  ssl_pretrain: feature_recon_v4_hard_stage234_smoothl1_public_ct_5000
+
+data:
+  loader: nnformer_npz
+  dataset_name: synapse
+  input_type: volume_3d
+  channels: 1
+  num_classes: 14
+  image_size: [64, 128, 128]
+  nnformer_preprocessed_dir: ${synapse_task_dir}
+  nnformer_npz_stage: stage1
+  nnformer_npz_prefer_3d: true
+  nnformer_map_ignore_label: true
+  splits_pkl: ${synapse_task_dir}/splits_final.pkl
+  fold: {fold}
+  seed: 42
+  patch_sampler: true
+  samples_per_epoch: 400
+  val_samples_per_epoch: 100
+  oversample_foreground: 0.33
+  val_metric_mode: accumulated
+  val_postprocess: false
+  image_key: image
+  label_key: label
+  report_brats_regions: false
+  report_per_class_dice: true
+
+pretrained:
+  checkpoint: {pretrain_ckpt}
+  load_encoder_only: true
+
+model:
+  architecture: unetrpp
+  preferred_source: official
+  unetrpp_official_variant: synapse
+  spatial_dims: 3
+  is_3d: true
+  in_channels: 1
+  out_channels: 14
+  img_size: [64, 128, 128]
+  feature_size: 16
+  unetrpp:
+    num_heads: 4
+    depths: [3, 3, 3, 3]
+    dims: [32, 64, 128, 256]
+    do_ds: true
+  ssl_init: {ssl_init}
+  ssl_method: {ssl_method}
+  ssl_checkpoint: {pretrain_ckpt}
+  load_encoder_only: {load_encoder_only}
+  strict_load: false
+
+loss:
+  name: dice_ce
+  include_background: false
+  to_onehot_y: true
+  softmax: true
+
+distributed:
+  enabled: auto
+  backend: nccl
+  find_unused_parameters: false
+  broadcast_buffers: false
+
+training:
+  num_workers: 4
+  batch_size: 2
+  epochs: 1000
+  optimizer: sgd
+  lr: 0.01
+  momentum: 0.99
+  nesterov: true
+  weight_decay: 3.0e-05
+  poly_lr: true
+  poly_lr_exponent: 0.9
+  early_stopping: true
+  early_stopping_patience: 150
+  early_stopping_min_epochs: 400
+  grad_clip_norm: 12.0
+  mixed_precision: true
+  amp_dtype: auto
+
+logging:
+  save_checkpoint_every: 10
+  best_metric: val_mean_dice
+
+checkpointing:
+  save_last: true
+  save_best: true
+  save_every_epochs: 100
+  save_top_k: 3
+  monitor: val_dice_mean
+  mode: max
+  keep_epoch_checkpoints: true
+  epoch_checkpoint_pattern: epoch_{epoch:03d}.pt
+  checkpoint_index_file: checkpoint_index.json
+  topk_epochs_dir: topk_epochs
+  topk_epochs_pattern: epoch_{epoch:04d}.pt
+
+eval_vis:
+  enabled: true
+  num_patch_batches: 2
+  num_full_volume_cases: 4
+  postprocess:
+    enabled: true
+    mode: auto
+    keep_largest_cc: true
+    keep_top_k: 1
+    min_component_voxels: 50
+    connectivity: 26
+
+output:
+  dir: ${output_root}/downstream/synapse/{method}/fold_{fold}

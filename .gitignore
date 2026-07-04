@@ -1,0 +1,16 @@
+outputs/
+/data/
+__pycache__/
+*.egg-info/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+paths.yaml
+configs/paths.yaml
+configs/generated/
+*.pt
+*.pth
+.DS_Store
+.venv/
+venv/
+env/
