@@ -61,7 +61,8 @@ def cmd_preprocess(args: argparse.Namespace) -> int:
 
 def cmd_run_pretrain(args: argparse.Namespace) -> int:
     model = args.model or default_model(load_task(args.task))
-    suffix = "_v5" if getattr(args, "recipe", "v4") == "v5" else ""
+    recipe = getattr(args, "recipe", "v5")
+    suffix = "_v4" if recipe == "v4" else ""
     cfg_path = repo_root() / "configs" / "generated" / args.task / f"pretrain_{model}{suffix}.yaml"
     if not cfg_path.is_file():
         _run_script(
@@ -74,7 +75,7 @@ def cmd_run_pretrain(args: argparse.Namespace) -> int:
                 "--phase",
                 "pretrain",
                 "--recipe",
-                getattr(args, "recipe", "v4"),
+                recipe,
             ],
         )
     extra = []
@@ -89,7 +90,7 @@ def cmd_run_pretrain(args: argparse.Namespace) -> int:
 def cmd_run_finetune(args: argparse.Namespace) -> int:
     model = args.model or default_model(load_task(args.task))
     folds = _resolve_folds(args.task, args.fold)
-    suffix = _recipe_suffix(args.recipe)
+    suffix = "_v4" if getattr(args, "recipe", "v5") == "v4" else ""
     rc = 0
     for fold in folds:
         cfg_path = (
@@ -189,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     pt.add_argument("--task", default="synapse")
     pt.add_argument("--model", default=None)
     pt.add_argument("--epochs", type=int, default=None)
-    pt.add_argument("--recipe", choices=["v4", "v5"], default="v4")
+    pt.add_argument("--recipe", choices=["v4", "v5"], default="v5")
     pt.set_defaults(func=cmd_run_pretrain)
 
     pf = pr_sub.add_parser("finetune")
@@ -197,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--model", default=None)
     pf.add_argument("--method", choices=["scratch", "ours"], required=True)
     pf.add_argument("--fold", default="all", help="Fold index or 'all'")
-    pf.add_argument("--recipe", choices=["v4", "v5"], default="v4")
+    pf.add_argument("--recipe", choices=["v4", "v5"], default="v5")
     pf.set_defaults(func=cmd_run_finetune)
 
     pe = pr_sub.add_parser("eval")
@@ -215,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--phase", choices=["pretrain", "finetune", "eval", "all"], default="all")
     mc.add_argument("--method", choices=["scratch", "ours", "both"], default="both")
     mc.add_argument("--fold", type=int, default=None)
-    mc.add_argument("--recipe", choices=["v4", "v5"], default="v4")
+    mc.add_argument("--recipe", choices=["v4", "v5"], default="v5")
 
     def _cmd_materialize(a: argparse.Namespace) -> int:
         args_list = ["--task", a.task, "--model", a.model, "--phase", a.phase, "--method", a.method, "--recipe", a.recipe]

@@ -1,10 +1,12 @@
-# Performance improvements (v5)
+# Training recipes
 
-Optional training improvements on top of the v4 paper recipe (`--recipe v4`, default).
+**Default (v5):** adaptive hard-token mining (`error_mass`), anatomy-aware masking, boundary objective preset, cosine λ schedule, and downstream `dice_ce_boundary` loss.
 
-## SSL pretrain (`v5_adaptive_boundary`)
+**Paper baseline (v4):** pass `--recipe v4` to pretrain/finetune/materialize commands.
 
-Template: `configs/pretrain/ours_v5_adaptive.yaml` → materialize with `--recipe v5`.
+## SSL pretrain (`v5_adaptive_boundary`, default)
+
+Template: `configs/pretrain/ours_v5_adaptive.yaml`
 
 | Feature | YAML keys |
 |---------|-----------|
@@ -16,19 +18,17 @@ Template: `configs/pretrain/ours_v5_adaptive.yaml` → materialize with `--recip
 | Longer SSL + cosine λ schedule | `training.epochs: 100`, `lambda_feature_schedule: cosine` |
 
 ```bash
-python scripts/cli.py run pretrain --task synapse --model unetrpp --recipe v5
+python scripts/cli.py run pretrain --task synapse --model unetrpp
 ```
 
 Presets: `boundary` | `overlap` | `balanced` (see `SSL_OBJECTIVE_PRESETS` in `unetrpp_feature_reconstruction.py`).
 
-Legacy v4 behaviour: `--recipe v4` or `hard_token_mining.mode: topk_error`.
-
-## Downstream boundary loss
+## Downstream (boundary loss + v5 init, default)
 
 Template: `configs/downstream/synapse_5fold_v5.yaml`
 
 ```bash
-python scripts/cli.py run finetune --task synapse --method ours --recipe v5 --fold all
+python scripts/cli.py run finetune --task synapse --method ours --fold all
 ```
 
 ```yaml
@@ -37,10 +37,21 @@ loss:
   boundary_weight: 0.15
 ```
 
+## Paper baseline (v4)
+
+```bash
+python scripts/cli.py run pretrain --task synapse --model unetrpp --recipe v4
+python scripts/cli.py run finetune --task synapse --method ours --recipe v4 --fold all
+```
+
+Uses `hard_token_mining.mode: topk_error`, stages 2/3/4, 50-epoch pretrain, standard `dice_ce` downstream loss.
+
 ## 5-fold ensemble eval
 
 ```bash
 bash scripts/run_synapse_5fold_ensemble_eval.sh ours v5 0,1,2,3,4 0.625
+# paper baseline checkpoints:
+bash scripts/run_synapse_5fold_ensemble_eval.sh ours v4 0,1,2,3,4 0.625
 ```
 
 Uses `eval.py --checkpoint_list` (mean logits in `official_npz`).
@@ -48,5 +59,5 @@ Uses `eval.py --checkpoint_list` (mean logits in `official_npz`).
 ## Tests
 
 ```bash
-python -m pytest tests/test_hard_token_mining.py -q
+python tests/test_hard_token_mining.py
 ```

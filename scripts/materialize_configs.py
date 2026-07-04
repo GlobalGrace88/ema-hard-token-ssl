@@ -48,12 +48,12 @@ def _recipe_key(recipe: str) -> str:
 
 
 def _pretrain_block(task: Dict[str, Any], recipe: str) -> Dict[str, Any]:
-    key = "pretrain_v5" if _recipe_key(recipe) == "v5" else "pretrain"
+    key = "pretrain_v4" if _recipe_key(recipe) == "v4" else "pretrain"
     block = task.get(key) or task["pretrain"]
     return dict(block)
 
 
-def materialize_pretrain(task_name: str, model_name: str, *, recipe: str = "v4") -> Path:
+def materialize_pretrain(task_name: str, model_name: str, *, recipe: str = "v5") -> Path:
     task = load_task(task_name)
     model_cfg = load_model(model_name)
     block = _pretrain_block(task, recipe)
@@ -63,13 +63,13 @@ def materialize_pretrain(task_name: str, model_name: str, *, recipe: str = "v4")
     cfg["model"] = _deep_merge(cfg.get("model") or {}, model_cfg)
     cfg.setdefault("experiment", {})["model"] = model_name
     cfg["experiment"]["task_name"] = task_name
-    suffix = "_v5" if _recipe_key(recipe) == "v5" else ""
+    suffix = "_v4" if _recipe_key(recipe) == "v4" else ""
     out = repo_root() / "configs" / "generated" / task_name / f"pretrain_{model_name}{suffix}.yaml"
     _write_yaml(out, cfg)
     return out
 
 
-def _pretrain_ckpt(task_name: str, model_name: str, *, recipe: str = "v4") -> str:
+def _pretrain_ckpt(task_name: str, model_name: str, *, recipe: str = "v5") -> str:
     task = load_task(task_name)
     block = _pretrain_block(task, recipe)
     root = output_root()
@@ -82,11 +82,11 @@ def materialize_finetune(
     *,
     method: str,
     fold: int,
-    recipe: str = "v4",
+    recipe: str = "v5",
 ) -> Path:
     task = load_task(task_name)
     model_cfg = load_model(model_name)
-    tpl_map = task.get("downstream_templates_v5" if _recipe_key(recipe) == "v5" else "downstream_templates")
+    tpl_map = task.get("downstream_templates_v4" if _recipe_key(recipe) == "v4" else "downstream_templates")
     tpl_path = repo_root() / str(tpl_map[method if method == "ours" else "scratch"])
     text = _load_template(tpl_path)
     is_ours = method == "ours"
@@ -114,7 +114,7 @@ def materialize_finetune(
     if not is_ours:
         cfg["pretrained"]["checkpoint"] = None
         cfg["model"]["ssl_checkpoint"] = None
-    suffix = "_v5" if v5 else ""
+    suffix = "_v4" if _recipe_key(recipe) == "v4" else ""
     out = (
         repo_root()
         / "configs"
@@ -181,7 +181,7 @@ def materialize_all(
     *,
     methods: Optional[List[str]] = None,
     folds: Optional[List[int]] = None,
-    recipe: str = "v4",
+    recipe: str = "v5",
 ) -> Dict[str, List[Path]]:
     task = load_task(task_name)
     folds = folds or task_folds(task)
@@ -205,7 +205,7 @@ def main() -> None:
     ap.add_argument("--phase", choices=["pretrain", "finetune", "eval", "all"], default="all")
     ap.add_argument("--method", choices=["scratch", "ours", "both"], default="both")
     ap.add_argument("--fold", type=int, default=None, help="Single fold (default: all task folds)")
-    ap.add_argument("--recipe", choices=["v4", "v5"], default="v4", help="v4=paper baseline; v5=adaptive hard-token + boundary")
+    ap.add_argument("--recipe", choices=["v4", "v5"], default="v5", help="v5=adaptive hard-token + boundary (default); v4=paper baseline")
     args = ap.parse_args()
 
     task = load_task(args.task)

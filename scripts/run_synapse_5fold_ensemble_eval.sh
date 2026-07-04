@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 METHOD="${1:-ours}"
-RECIPE="${2:-v4}"
+RECIPE="${2:-v5}"
 FOLDS="${3:-0,1,2,3,4}"
 OVERLAP="${4:-0.625}"
 
