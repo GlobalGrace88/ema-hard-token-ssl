@@ -93,7 +93,7 @@ def materialize_finetune(
     v5 = _recipe_key(recipe) == "v5"
     mapping = {
         "fold": fold,
-        "method": f"{method}_v5" if v5 and is_ours else method,
+        "method": method,
         "pretrain_ckpt": _pretrain_ckpt(task_name, model_name, recipe=recipe) if is_ours else "null",
         "ssl_init": "true" if is_ours else "false",
         "ssl_method": (
