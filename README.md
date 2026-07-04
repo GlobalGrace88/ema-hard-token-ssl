@@ -68,6 +68,7 @@ Pretrain and finetune checkpoints embed `release_metadata` (JSON sidecar `.pt.me
 - [datasets.md](docs/datasets.md) — upstream FLARE+AMOS, downstream Synapse
 - [reproduction.md](docs/reproduction.md) — full paper reproduction steps
 - [setup_unetrpp.md](docs/setup_unetrpp.md) — clone official UNETR++
+- [PERFORMANCE_IMPROVEMENTS.md](docs/PERFORMANCE_IMPROVEMENTS.md) — optional v5 recipe (`--recipe v5`)
 
 ## Citation
 

@@ -21,6 +21,8 @@ __all__ = [
     "dice_loss",
     "dice_ce_loss",
     "dice_focal_loss",
+    "dice_ce_boundary_loss",
+    "boundary_map_from_labels",
     "build_segmentation_loss",
     "classification_ce",
     "bce_multilabel",
@@ -90,6 +92,52 @@ def compute_segmentation_loss(
     return total / len(heads)
 
 
+def boundary_map_from_labels(
+    y: torch.Tensor,
+    *,
+    num_classes: int,
+    kernel: int = 3,
+) -> torch.Tensor:
+    """Approximate voxel boundary map from integer labels ``[B,1,D,H,W]`` -> ``[B,1,D,H,W]`` float."""
+    if y.dim() == 4:
+        y = y.unsqueeze(1)
+    fg = (y > 0).float()
+    if int(num_classes) > 1:
+        one_hot = torch.zeros(
+            y.shape[0], int(num_classes), *y.shape[-3:], device=y.device, dtype=torch.float32,
+        )
+        yi = y.long().clamp_min(0).clamp_max(int(num_classes) - 1)
+        one_hot.scatter_(1, yi, 1.0)
+        fg = one_hot[:, 1:].sum(dim=1, keepdim=True).clamp_max(1.0) if one_hot.shape[1] > 1 else fg
+    pad = max(0, int(kernel) // 2)
+    dil = F.max_pool3d(fg, kernel_size=kernel, stride=1, padding=pad)
+    ero = -F.max_pool3d(-fg, kernel_size=kernel, stride=1, padding=pad)
+    return (dil - ero).clamp_min(0.0)
+
+
+class DiceCEBoundaryLoss(nn.Module):
+    """Dice+CE with an auxiliary boundary L1 term on foreground edges."""
+
+    def __init__(self, dice_ce: nn.Module, *, boundary_weight: float = 0.1, num_classes: int = 14) -> None:
+        super().__init__()
+        self.dice_ce = dice_ce
+        self.boundary_weight = float(boundary_weight)
+        self.num_classes = int(num_classes)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        base = self.dice_ce(pred, target)
+        if self.boundary_weight <= 0:
+            return base
+        if pred.dim() != 5:
+            return base
+        probs = torch.softmax(pred, dim=1)
+        pred_labels = probs.argmax(dim=1, keepdim=True)
+        pred_b = boundary_map_from_labels(pred_labels, num_classes=self.num_classes)
+        tgt_b = boundary_map_from_labels(target, num_classes=self.num_classes)
+        b_loss = F.l1_loss(pred_b, tgt_b)
+        return base + self.boundary_weight * b_loss
+
+
 def build_segmentation_loss(
     config: Optional[Dict[str, Any]] = None,
 ) -> "nn.Module":
@@ -124,6 +172,17 @@ def build_segmentation_loss(
             softmax=bool(c.get("softmax", True)),
             to_onehot_y=bool(c.get("to_onehot_y", True)),
         )
+    if name in ("dice_ce_boundary", "dice_ce_with_boundary", "dicece_boundary"):
+        dkw = {k: v for k, v in c.items() if k in ("include_background", "to_onehot_y", "softmax", "sigmoid", "lambda_dice", "lambda_ce", "squared_pred", "jaccard")}
+        dkw.setdefault("softmax", bool(c.get("softmax", True)))
+        dkw.setdefault("to_onehot_y", bool(c.get("to_onehot_y", True)))
+        dkw.setdefault("include_background", bool(c.get("include_background", False)))
+        base = DiceCELoss(**dkw)  # type: ignore[operator, misc, arg-type]
+        return DiceCEBoundaryLoss(
+            base,
+            boundary_weight=float(c.get("boundary_weight", 0.1)),
+            num_classes=int(c.get("num_classes", 14)),
+        )
     raise NotImplementedError(f"Unknown loss name: {name!r}")
 
 
@@ -140,6 +199,10 @@ def dice_ce_loss() -> "nn.Module":
 def dice_focal_loss() -> "nn.Module":
     _require_monai("DiceFocalLoss")
     return DiceFocalLoss(softmax=True)  # type: ignore[operator]
+
+
+def dice_ce_boundary_loss(**kwargs: Any) -> "nn.Module":
+    return build_segmentation_loss({"name": "dice_ce_boundary", **kwargs})
 
 
 def classification_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:

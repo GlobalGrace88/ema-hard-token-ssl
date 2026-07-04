@@ -1,0 +1,109 @@
+experiment:
+  name: synapse_v5_adaptive_pretrain
+  modality: ct
+  task: ssl_pretraining
+  method: inpainting_feature_reconstruction
+  seed: 42
+  output_dir: ${output_root}/pretrain/synapse_v5_adaptive
+  upstream_dataset: public_ct_ssl
+  dataset: synapse
+
+data:
+  pretrain_layout: volume3d
+  input_type: volume_3d
+  loader: ssl_ct_manifest
+  manifest_csv: ${ssl_manifest_csv}
+  patch_sampler: true
+  samples_per_epoch: 5000
+  image_size: [64, 128, 128]
+  volume_normalize: none
+  channels: 1
+  seed: 42
+
+model:
+  ssl_method: inpainting_feature_reconstruction
+  backbone_name: unetrpp
+  preferred_source: official
+  unetrpp_official_variant: synapse
+  in_channels: 1
+  out_channels: 1
+  is_3d: true
+  spatial_size: [64, 128, 128]
+  hidden_size: 256
+  unetrpp:
+    num_heads: 4
+    depths: [3, 3, 3, 3]
+    dims: [32, 64, 128, 256]
+    do_ds: false
+
+inpainting:
+  mask_strategy: aamm
+  mask_ratio: 0.75
+  patch_size: 16
+  reconstruct_only_masked: true
+  loss: l1
+  hybrid_uniform_mix: 0.15
+  masking:
+    use_foreground_prior: true
+    use_boundary_prior: true
+    use_distance_map: true
+    zone_probs:
+      interior: 0.55
+      boundary: 0.90
+      context: 0.25
+
+feature_reconstruction:
+  enabled: true
+  version: v5_adaptive_boundary
+  objective_preset: boundary
+  loss: hard_cosine_smoothl1
+  masked_tokens_only: true
+  predictor_hidden_dim: 512
+  lambda_feature: 0.05
+  lambda_feature_schedule: cosine
+  lambda_feature_final: 0.04
+  lambda_feature_warmup_epochs: 10
+  warmup_epochs: 10
+  teacher_momentum_base: 0.996
+  teacher_momentum_final: 1.0
+  token_mask_mode: any
+  hard_token_mining:
+    enabled: true
+    mode: error_mass
+    error_mass_fraction: 0.65
+    topk_ratio: 0.5
+    min_tokens: 8
+    detach_weights: true
+    apply_per_stage: true
+    curriculum_epochs: 15
+    curriculum_topk_start: 0.80
+    curriculum_error_mass_start: 0.80
+    error_mass_fraction_per_stage:
+      stage2: 0.60
+      stage3: 0.65
+      stage4: 0.70
+  feature_loss:
+    cosine_weight: 1.0
+    smooth_l1_weight: 0.25
+    normalize_before_l1: true
+
+distributed:
+  enabled: auto
+  backend: nccl
+  find_unused_parameters: false
+  broadcast_buffers: false
+
+training:
+  batch_size: 2
+  grad_accum_steps: 1
+  epochs: 100
+  lr: 0.0001
+  min_lr: 1.0e-06
+  weight_decay: 0.04
+  mixed_precision: true
+  num_workers: 4
+  clip_grad: 3.0
+
+logging:
+  log_every: 10
+  show_progress: true

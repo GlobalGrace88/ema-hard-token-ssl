@@ -65,15 +65,16 @@ def _train_step(
     feat_cfg: dict,
     *,
     lambda_now: float,
+    epoch: int = 0,
 ) -> dict:
     import torch
     import torch.nn.functional as F
 
     from dinomim_pytorch.unetrpp_dino_inpainting import inpainting_recon_loss
     from dinomim_pytorch.unetrpp_feature_reconstruction import (
+        inpainting_mask_and_indicator,
         masked_cosine_feature_loss,
         multiscale_feature_loss,
-        random_block_mask_and_indicator,
         resolve_feature_recon_version,
         resolve_stage_weights,
         is_multiscale_feature_recon,
@@ -104,12 +105,7 @@ def _train_step(
     version = resolve_feature_recon_version(feat_cfg)
     stage_weights = resolve_stage_weights(feat_cfg, model.stages)
 
-    x_masked, voxel_mask = random_block_mask_and_indicator(
-        x_clean,
-        mask_ratio=mask_ratio,
-        patch_size=patch_size,
-        mask_value=mask_value,
-    )
+    x_masked, voxel_mask = inpainting_mask_and_indicator(x_clean, inpaint_cfg)
 
     predictors = (
         model.feature_predictors.module
@@ -157,6 +153,7 @@ def _train_step(
                 token_masks=token_masks,
                 stage_weights=stage_weights,
                 feat_cfg=feat_cfg,
+                epoch=epoch,
             )
             out: Dict[str, Any] = {
                 "loss": l_recon + float(lambda_now) * l_feat,
@@ -266,6 +263,7 @@ def main() -> None:
         feature_collapse_warning,
         format_feature_recon_config_log,
         lambda_feature_for_epoch,
+        merge_feature_reconstruction_config,
         predictor_grad_norm,
         predictor_grad_norm_per_stage,
         resolve_feature_recon_version,
@@ -306,7 +304,8 @@ def main() -> None:
         cfg["data"] = apply_patch_sampler_ddp_data_cfg(data, rank=get_rank(), world_size=get_world_size())
         data = dict(cfg["data"])
 
-    feat_cfg = cfg.get("feature_reconstruction") or {}
+    feat_cfg = merge_feature_reconstruction_config(cfg.get("feature_reconstruction") or {})
+    cfg["feature_reconstruction"] = feat_cfg
     inpaint_cfg = cfg.get("inpainting") or {}
     log = cfg.get("logging") or {}
     exp = cfg.get("experiment") or {}
@@ -382,6 +381,7 @@ def main() -> None:
     max_batches = int(debug.get("max_batches_per_epoch", 50)) if debug_enabled else None
     n_batches = max(1, min(len(loader), max_batches) if max_batches else len(loader))
     epochs = int(train.get("epochs", 200))
+    feat_cfg["total_epochs"] = epochs
     total_steps = max(1, n_batches * epochs)
     grad_accum = max(1, int(train.get("grad_accum_steps", 1)))
     max_grad = float(train.get("clip_grad", 3.0))
@@ -430,8 +430,8 @@ def main() -> None:
 
     if args.dry_batch:
         batch = next(iter(loader))
-        _, lam = lambda_feature_for_epoch(feat_cfg, 0)
-        st = _train_step(model, batch, device, use_amp, spatial, inpaint_cfg, feat_cfg, lambda_now=lam)
+        _, lam = lambda_feature_for_epoch(feat_cfg, 0, total_epochs=epochs)
+        st = _train_step(model, batch, device, use_amp, spatial, inpaint_cfg, feat_cfg, lambda_now=lam, epoch=0)
         if is_main_process():
             print(
                 f"dry-batch loss={float(st['loss'].detach()):.6f} recon={st['mean_recon']:.6f} "
@@ -450,7 +450,7 @@ def main() -> None:
             t_ep0 = time.perf_counter()
             model.student_net.train()
             model.feature_predictors.train()
-            _, lambda_now = lambda_feature_for_epoch(feat_cfg, ep)
+            _, lambda_now = lambda_feature_for_epoch(feat_cfg, ep, total_epochs=epochs)
 
             ep_loss = ep_recon = ep_feat = ep_cos = 0.0
             ep_s_std = ep_t_std = ep_sp_std = ep_tt_std = 0.0
@@ -468,7 +468,8 @@ def main() -> None:
                 if accum_idx == 0:
                     opt.zero_grad(set_to_none=True)
                 st = _train_step(
-                    model, batch, device, use_amp, spatial, inpaint_cfg, feat_cfg, lambda_now=lambda_now,
+                    model, batch, device, use_amp, spatial, inpaint_cfg, feat_cfg,
+                    lambda_now=lambda_now, epoch=ep,
                 )
                 loss = st["loss"] / grad_accum
                 scaler.scale(loss).backward()

@@ -43,23 +43,37 @@ def _write_yaml(path: Path, cfg: Dict[str, Any]) -> None:
         yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
 
 
-def materialize_pretrain(task_name: str, model_name: str) -> Path:
+def _recipe_key(recipe: str) -> str:
+    return "v5" if str(recipe).lower() in ("v5", "v5_adaptive", "adaptive") else "v4"
+
+
+def _pretrain_block(task: Dict[str, Any], recipe: str) -> Dict[str, Any]:
+    key = "pretrain_v5" if _recipe_key(recipe) == "v5" else "pretrain"
+    block = task.get(key) or task["pretrain"]
+    return dict(block)
+
+
+def materialize_pretrain(task_name: str, model_name: str, *, recipe: str = "v4") -> Path:
     task = load_task(task_name)
     model_cfg = load_model(model_name)
-    tpl_path = repo_root() / str(task["pretrain"]["template"])
+    block = _pretrain_block(task, recipe)
+    tpl_path = repo_root() / str(block["template"])
     cfg = yaml.safe_load(_load_template(tpl_path)) or {}
     cfg = substitute_placeholders(cfg)
     cfg["model"] = _deep_merge(cfg.get("model") or {}, model_cfg)
     cfg.setdefault("experiment", {})["model"] = model_name
     cfg["experiment"]["task_name"] = task_name
-    out = repo_root() / "configs" / "generated" / task_name / f"pretrain_{model_name}.yaml"
+    suffix = "_v5" if _recipe_key(recipe) == "v5" else ""
+    out = repo_root() / "configs" / "generated" / task_name / f"pretrain_{model_name}{suffix}.yaml"
     _write_yaml(out, cfg)
     return out
 
 
-def _pretrain_ckpt(task_name: str, model_name: str) -> str:
+def _pretrain_ckpt(task_name: str, model_name: str, *, recipe: str = "v4") -> str:
+    task = load_task(task_name)
+    block = _pretrain_block(task, recipe)
     root = output_root()
-    return str(root / "pretrain" / "synapse_stage234" / "best.pt")
+    return str(root / str(block["output_subdir"]) / "best.pt")
 
 
 def materialize_finetune(
@@ -68,18 +82,27 @@ def materialize_finetune(
     *,
     method: str,
     fold: int,
+    recipe: str = "v4",
 ) -> Path:
     task = load_task(task_name)
     model_cfg = load_model(model_name)
-    tpl_path = repo_root() / str(task["downstream_templates"][method if method == "ours" else "scratch"])
+    tpl_map = task.get("downstream_templates_v5" if _recipe_key(recipe) == "v5" else "downstream_templates")
+    tpl_path = repo_root() / str(tpl_map[method if method == "ours" else "scratch"])
     text = _load_template(tpl_path)
     is_ours = method == "ours"
+    v5 = _recipe_key(recipe) == "v5"
     mapping = {
         "fold": fold,
-        "method": method,
-        "pretrain_ckpt": _pretrain_ckpt(task_name, model_name) if is_ours else "null",
+        "method": f"{method}_v5" if v5 and is_ours else method,
+        "pretrain_ckpt": _pretrain_ckpt(task_name, model_name, recipe=recipe) if is_ours else "null",
         "ssl_init": "true" if is_ours else "false",
-        "ssl_method": "feature_recon_v4_hard_stage234_smoothl1" if is_ours else "none",
+        "ssl_method": (
+            "feature_recon_v5_adaptive_boundary"
+            if v5 and is_ours
+            else "feature_recon_v4_hard_stage234_smoothl1"
+            if is_ours
+            else "none"
+        ),
         "load_encoder_only": "true" if is_ours else "false",
     }
     rendered = substitute_placeholders(_render_template(text, mapping))
@@ -91,7 +114,15 @@ def materialize_finetune(
     if not is_ours:
         cfg["pretrained"]["checkpoint"] = None
         cfg["model"]["ssl_checkpoint"] = None
-    out = repo_root() / "configs" / "generated" / task_name / "finetune" / f"{model_name}_{method}_fold{fold}.yaml"
+    suffix = "_v5" if v5 else ""
+    out = (
+        repo_root()
+        / "configs"
+        / "generated"
+        / task_name
+        / "finetune"
+        / f"{model_name}_{method}{suffix}_fold{fold}.yaml"
+    )
     _write_yaml(out, cfg)
     return out
 
@@ -150,16 +181,19 @@ def materialize_all(
     *,
     methods: Optional[List[str]] = None,
     folds: Optional[List[int]] = None,
+    recipe: str = "v4",
 ) -> Dict[str, List[Path]]:
     task = load_task(task_name)
     folds = folds or task_folds(task)
     methods = methods or ["scratch", "ours"]
     paths: Dict[str, List[Path]] = {"pretrain": [], "finetune": [], "eval": []}
-    paths["pretrain"].append(materialize_pretrain(task_name, model_name))
+    paths["pretrain"].append(materialize_pretrain(task_name, model_name, recipe=recipe))
     overlap = float((task.get("eval") or {}).get("official_overlap", 0.5))
     for method in methods:
         for fold in folds:
-            paths["finetune"].append(materialize_finetune(task_name, model_name, method=method, fold=fold))
+            paths["finetune"].append(
+                materialize_finetune(task_name, model_name, method=method, fold=fold, recipe=recipe)
+            )
             paths["eval"].append(materialize_eval(task_name, model_name, method=method, fold=fold, overlap=overlap))
     return paths
 
@@ -171,6 +205,7 @@ def main() -> None:
     ap.add_argument("--phase", choices=["pretrain", "finetune", "eval", "all"], default="all")
     ap.add_argument("--method", choices=["scratch", "ours", "both"], default="both")
     ap.add_argument("--fold", type=int, default=None, help="Single fold (default: all task folds)")
+    ap.add_argument("--recipe", choices=["v4", "v5"], default="v4", help="v4=paper baseline; v5=adaptive hard-token + boundary")
     args = ap.parse_args()
 
     task = load_task(args.task)
@@ -178,12 +213,12 @@ def main() -> None:
     methods = ["scratch", "ours"] if args.method == "both" else [args.method]
 
     if args.phase in ("pretrain", "all"):
-        p = materialize_pretrain(args.task, args.model)
+        p = materialize_pretrain(args.task, args.model, recipe=args.recipe)
         print(p)
     if args.phase in ("finetune", "all"):
         for method in methods:
             for fold in folds:
-                p = materialize_finetune(args.task, args.model, method=method, fold=fold)
+                p = materialize_finetune(args.task, args.model, method=method, fold=fold, recipe=args.recipe)
                 print(p)
     if args.phase in ("eval", "all"):
         overlap = float((task.get("eval") or {}).get("official_overlap", 0.5))

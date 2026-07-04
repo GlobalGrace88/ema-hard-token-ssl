@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import copy
 import sys
-from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import torch
@@ -67,6 +66,12 @@ def resolve_feature_recon_version(feat_cfg: Mapping[str, Any]) -> str:
         "hard_stage4_smoothl1",
     ):
         return "v4_hard_stage4_smoothl1"
+    if version in (
+        "v5_adaptive_boundary",
+        "v5_adaptive",
+        "adaptive_boundary",
+    ):
+        return "v5_adaptive_boundary"
     if version in ("v1", "v1_stage4", "stage4", ""):
         return "v1_stage4"
     return version
@@ -83,6 +88,7 @@ def is_multiscale_feature_recon(version: str) -> bool:
         "v4_hard_stage234_cosine",
         "v4_stage234_cosine_nohard",
         "v4_hard_stage4_smoothl1",
+        "v5_adaptive_boundary",
     )
 
 
@@ -97,6 +103,8 @@ def resolve_feature_loss_kind(feat_cfg: Mapping[str, Any]) -> str:
         return "hard_cosine_smoothl1"
     if version == "v4_hard_stage234_smoothl1":
         return "hard_cosine_smoothl1"
+    if version == "v5_adaptive_boundary":
+        return "hard_cosine_smoothl1"
     if version == "v4_hard_stage234_cosine":
         return "hard_cosine"
     if version in ("v4_hard_stage4_smoothl1",):
@@ -106,20 +114,94 @@ def resolve_feature_loss_kind(feat_cfg: Mapping[str, Any]) -> str:
     return "cosine"
 
 
+SSL_OBJECTIVE_PRESETS: Dict[str, Dict[str, Any]] = {
+    # Paper main: best HD95 / boundary focus (stages 2--4).
+    "boundary": {"stages": [2, 3, 4], "stage_weights": {"stage2": 0.2, "stage3": 0.3, "stage4": 0.5}},
+    # Best mean Dice in paper ablations (stages 3--4).
+    "overlap": {"stages": [3, 4], "stage_weights": {"stage3": 0.35, "stage4": 0.65}},
+    # Compromise between boundary and overlap objectives.
+    "balanced": {"stages": [2, 3, 4], "stage_weights": {"stage2": 0.25, "stage3": 0.35, "stage4": 0.4}},
+}
+
+
+def apply_objective_preset(feat_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge ``objective_preset`` into ``stages`` / ``stage_weights`` when not explicitly set."""
+    out = dict(feat_cfg or {})
+    preset_name = str(out.get("objective_preset", "") or "").strip().lower()
+    if not preset_name:
+        return out
+    preset = SSL_OBJECTIVE_PRESETS.get(preset_name)
+    if preset is None:
+        raise ValueError(
+            f"Unknown objective_preset={preset_name!r}. "
+            f"Choose from: {', '.join(sorted(SSL_OBJECTIVE_PRESETS))}"
+        )
+    if not out.get("stages"):
+        out["stages"] = list(preset["stages"])
+    if not out.get("stage_weights"):
+        out["stage_weights"] = dict(preset["stage_weights"])
+    return out
+
+
+def merge_feature_reconstruction_config(feat_cfg: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Normalize feature-reconstruction config (objective preset, mining defaults)."""
+    return apply_objective_preset(dict(feat_cfg or {}))
+
+
 def resolve_hard_token_mining_cfg(feat_cfg: Mapping[str, Any]) -> Dict[str, Any]:
     raw = dict(feat_cfg.get("hard_token_mining") or {})
     loss_kind = resolve_feature_loss_kind(feat_cfg)
     enabled = bool(raw.get("enabled", False))
     if loss_kind.startswith("hard"):
         enabled = True
+    mode = str(raw.get("mode", "topk_error")).strip().lower()
+    if mode in ("topk", "topk_ratio", "topk_error"):
+        mode = "topk_error"
+    elif mode in ("error_mass", "mass", "cumulative_error"):
+        mode = "error_mass"
     return {
         "enabled": enabled,
-        "mode": str(raw.get("mode", "topk_error")).strip().lower(),
+        "mode": mode,
         "topk_ratio": float(raw.get("topk_ratio", 0.5)),
+        "error_mass_fraction": float(raw.get("error_mass_fraction", 0.65)),
+        "topk_ratio_per_stage": dict(raw.get("topk_ratio_per_stage") or {}),
+        "error_mass_fraction_per_stage": dict(raw.get("error_mass_fraction_per_stage") or {}),
         "min_tokens": int(raw.get("min_tokens", 8)),
         "detach_weights": bool(raw.get("detach_weights", True)),
         "apply_per_stage": bool(raw.get("apply_per_stage", True)),
+        "curriculum_epochs": int(raw.get("curriculum_epochs", 0) or 0),
+        "curriculum_topk_start": float(raw.get("curriculum_topk_start", 0.75)),
+        "curriculum_error_mass_start": float(raw.get("curriculum_error_mass_start", 0.85)),
     }
+
+
+def resolve_hard_token_mining_for_epoch(
+    feat_cfg: Mapping[str, Any],
+    epoch: int,
+    *,
+    stage_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Epoch-aware hard-token settings (curriculum + optional per-stage overrides)."""
+    hard = dict(resolve_hard_token_mining_cfg(feat_cfg))
+    cur_epochs = int(hard.get("curriculum_epochs", 0) or 0)
+    if cur_epochs > 0:
+        t = min(1.0, float(epoch + 1) / float(cur_epochs))
+        hard["topk_ratio"] = (
+            hard["curriculum_topk_start"]
+            + (hard["topk_ratio"] - hard["curriculum_topk_start"]) * t
+        )
+        hard["error_mass_fraction"] = (
+            hard["curriculum_error_mass_start"]
+            + (hard["error_mass_fraction"] - hard["curriculum_error_mass_start"]) * t
+        )
+    if stage_key and hard.get("apply_per_stage", True):
+        per_topk = hard.get("topk_ratio_per_stage") or {}
+        per_mass = hard.get("error_mass_fraction_per_stage") or {}
+        if stage_key in per_topk:
+            hard["topk_ratio"] = float(per_topk[stage_key])
+        if stage_key in per_mass:
+            hard["error_mass_fraction"] = float(per_mass[stage_key])
+    return hard
 
 
 def resolve_feature_loss_weights(feat_cfg: Mapping[str, Any]) -> Dict[str, float]:
@@ -131,7 +213,7 @@ def resolve_feature_loss_weights(feat_cfg: Mapping[str, Any]) -> Dict[str, float
     }
 
 
-def _hard_token_selection_mask(
+def _hard_token_selection_mask_topk(
     per_token_err: torch.Tensor,
     base_mask: torch.Tensor,
     *,
@@ -139,7 +221,7 @@ def _hard_token_selection_mask(
     min_tokens: int,
     detach_weights: bool,
 ) -> Tuple[torch.Tensor, float]:
-    """Select top-error masked tokens. Returns (hard_mask, total_hard_tokens)."""
+    """Select top-error masked tokens by ratio. Returns (hard_mask, total_hard_tokens)."""
     err = per_token_err.detach() if detach_weights else per_token_err
     hard_mask = torch.zeros_like(base_mask)
     total_hard = 0.0
@@ -165,7 +247,73 @@ def _hard_token_selection_mask(
     return hard_mask, total_hard
 
 
+def _hard_token_selection_mask_error_mass(
+    per_token_err: torch.Tensor,
+    base_mask: torch.Tensor,
+    *,
+    error_mass_fraction: float,
+    min_tokens: int,
+    detach_weights: bool,
+) -> Tuple[torch.Tensor, float]:
+    """Select hardest tokens until cumulative error reaches ``error_mass_fraction`` of masked mass."""
+    err = per_token_err.detach() if detach_weights else per_token_err
+    hard_mask = torch.zeros_like(base_mask)
+    total_hard = 0.0
+    mass_frac = float(min(max(error_mass_fraction, 0.0), 1.0))
+    bsz = int(base_mask.shape[0])
+    for bi in range(bsz):
+        valid = base_mask[bi] > 0
+        n_valid = int(valid.sum().item())
+        if n_valid <= 0:
+            continue
+        valid_idx = torch.nonzero(valid, as_tuple=False).squeeze(-1)
+        if valid_idx.numel() == 0:
+            continue
+        errs = err[bi, valid_idx]
+        if errs.numel() == 1:
+            chosen = valid_idx
+        else:
+            sorted_err, order = torch.sort(errs, descending=True)
+            total_err = float(sorted_err.sum().clamp_min(1e-8).item())
+            target = mass_frac * total_err
+            cum = torch.cumsum(sorted_err, dim=0)
+            k = int((cum < target).sum().item()) + 1
+            k = max(int(min_tokens), k)
+            k = min(k, n_valid)
+            chosen = valid_idx[order[:k]]
+        hard_mask[bi, chosen] = 1.0
+        total_hard += float(chosen.numel())
+    return hard_mask, total_hard
+
+
+def _hard_token_selection_mask(
+    per_token_err: torch.Tensor,
+    base_mask: torch.Tensor,
+    *,
+    hard_cfg: Mapping[str, Any],
+) -> Tuple[torch.Tensor, float]:
+    mode = str(hard_cfg.get("mode", "topk_error")).lower()
+    common = {
+        "min_tokens": int(hard_cfg.get("min_tokens", 8)),
+        "detach_weights": bool(hard_cfg.get("detach_weights", True)),
+    }
+    if mode == "error_mass":
+        return _hard_token_selection_mask_error_mass(
+            per_token_err,
+            base_mask,
+            error_mass_fraction=float(hard_cfg.get("error_mass_fraction", 0.65)),
+            **common,
+        )
+    return _hard_token_selection_mask_topk(
+        per_token_err,
+        base_mask,
+        topk_ratio=float(hard_cfg.get("topk_ratio", 0.5)),
+        **common,
+    )
+
+
 def resolve_feature_stages(feat_cfg: Mapping[str, Any]) -> List[int]:
+    feat_cfg = apply_objective_preset(dict(feat_cfg or {}))
     version = resolve_feature_recon_version(feat_cfg)
     raw = feat_cfg.get("stages")
     if raw:
@@ -182,6 +330,7 @@ def resolve_feature_stages(feat_cfg: Mapping[str, Any]) -> List[int]:
 
 
 def resolve_stage_weights(feat_cfg: Mapping[str, Any], stages: List[int]) -> Dict[str, float]:
+    feat_cfg = apply_objective_preset(dict(feat_cfg or {}))
     raw = dict(feat_cfg.get("stage_weights") or {})
     weights: Dict[str, float] = {}
     for stage in stages:
@@ -195,8 +344,12 @@ def resolve_stage_weights(feat_cfg: Mapping[str, Any], stages: List[int]) -> Dic
         if stages == [2, 3, 4]:
             if version == "v2_fair_multiscale":
                 weights = {"stage2": 0.2, "stage3": 0.3, "stage4": 0.5}
+            elif str(feat_cfg.get("objective_preset", "")).lower() == "boundary":
+                weights = {"stage2": 0.2, "stage3": 0.3, "stage4": 0.5}
             else:
                 weights = {"stage2": 0.5, "stage3": 0.3, "stage4": 0.2}
+        elif stages == [3, 4]:
+            weights = {"stage3": 0.35, "stage4": 0.65}
         else:
             inv = 1.0 / float(len(stages))
             weights = {f"stage{s}": inv for s in stages}
@@ -267,6 +420,72 @@ def voxel_mask_to_token_mask(
         return (m.flatten(2).squeeze(1) >= float(threshold)).float()
     m = F.interpolate(voxel_mask.float(), size=(dp, hp, wp), mode="nearest")
     return m.flatten(2).squeeze(1)
+
+
+def inpainting_mask_and_indicator(
+    x: torch.Tensor,
+    inpaint_cfg: Mapping[str, Any],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Sample inpainting mask for SSL pretraining.
+
+    ``inpainting.mask_strategy``: ``random`` (default) or ``aamm`` (anatomy-aware zones).
+    """
+    strategy = str(inpaint_cfg.get("mask_strategy", "random")).strip().lower()
+    mask_ratio = float(inpaint_cfg.get("mask_ratio", 0.75))
+    patch_size = int(inpaint_cfg.get("patch_size", 16))
+    mask_value = float(inpaint_cfg.get("mask_value", 0.0))
+
+    if strategy in ("random", "block", "uniform"):
+        return random_block_mask_and_indicator(
+            x,
+            mask_ratio=mask_ratio,
+            patch_size=patch_size,
+            mask_value=mask_value,
+        )
+
+    if strategy in ("aamm", "anatomy", "anatomy_aware"):
+        from dinomim_pytorch.masking.aamm.apply import aamm_cfg_from_masking
+        from dinomim_pytorch.masking.aamm.multi_zone_masking import sample_aamm_mask_3d
+
+        masking_cfg = aamm_cfg_from_masking(dict(inpaint_cfg.get("masking") or {}))
+        hybrid = float(inpaint_cfg.get("hybrid_uniform_mix", masking_cfg.get("hybrid_uniform_mix", 0.0)))
+        if hybrid > 0.0 and torch.rand(()) < hybrid:
+            return random_block_mask_and_indicator(
+                x,
+                mask_ratio=mask_ratio,
+                patch_size=patch_size,
+                mask_value=mask_value,
+            )
+
+        if x.dim() != 5:
+            raise ValueError(f"AAMM inpainting mask expects [B,C,D,H,W], got {tuple(x.shape)}")
+        b, c, d, h, w = x.shape
+        indicator = torch.zeros(b, 1, d, h, w, device=x.device, dtype=x.dtype)
+        for bi in range(b):
+            _flat, mask_3d, _ = sample_aamm_mask_3d(
+                x[bi : bi + 1],
+                patch_size=patch_size,
+                mask_ratio=mask_ratio,
+                cfg=masking_cfg,
+                device=x.device,
+            )
+            m = torch.nn.functional.interpolate(
+                mask_3d.float().view(1, 1, *mask_3d.shape[-3:]),
+                size=(d, h, w),
+                mode="nearest",
+            )
+            indicator[bi] = m
+        x_masked = x * (1.0 - indicator)
+        if mask_value != 0.0:
+            x_masked = torch.where(
+                indicator.bool().expand_as(x),
+                torch.full_like(x, mask_value),
+                x_masked,
+            )
+        return x_masked, indicator
+
+    raise ValueError(f"Unknown inpainting.mask_strategy={strategy!r} (use random or aamm).")
 
 
 def random_block_mask_and_indicator(
@@ -376,11 +595,13 @@ def masked_feature_reconstruction_loss(
     *,
     token_mask: Optional[torch.Tensor] = None,
     feat_cfg: Optional[Mapping[str, Any]] = None,
+    epoch: int = 0,
+    stage_key: Optional[str] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Cosine / hard-cosine / hard-cosine+SmoothL1 feature loss with optional hard-token mining."""
     feat_cfg = feat_cfg or {}
     loss_kind = resolve_feature_loss_kind(feat_cfg)
-    hard_cfg = resolve_hard_token_mining_cfg(feat_cfg)
+    hard_cfg = resolve_hard_token_mining_for_epoch(feat_cfg, epoch, stage_key=stage_key)
     loss_w = resolve_feature_loss_weights(feat_cfg)
 
     pred_norm = F.normalize(student_pred, dim=-1)
@@ -399,9 +620,7 @@ def masked_feature_reconstruction_loss(
         hard_mask, hard_token_count = _hard_token_selection_mask(
             per_token_cos_err,
             base_mask,
-            topk_ratio=hard_cfg["topk_ratio"],
-            min_tokens=hard_cfg["min_tokens"],
-            detach_weights=hard_cfg["detach_weights"],
+            hard_cfg=hard_cfg,
         )
         eff_mask = hard_mask
         hard_frac = float(hard_mask.sum() / base_mask.sum().clamp_min(1.0).detach())
@@ -444,6 +663,7 @@ def multiscale_feature_loss(
     token_masks: Dict[str, Optional[torch.Tensor]],
     stage_weights: Dict[str, float],
     feat_cfg: Optional[Mapping[str, Any]] = None,
+    epoch: int = 0,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     total = torch.zeros((), device=next(iter(student_preds.values())).device)
     meta: Dict[str, float] = {}
@@ -462,7 +682,7 @@ def multiscale_feature_loss(
             meta[f"smooth_l1_{stage_key}"] = 0.0
             continue
         loss_s, loss_meta = masked_feature_reconstruction_loss(
-            pred, target, token_mask=mask, feat_cfg=feat_cfg,
+            pred, target, token_mask=mask, feat_cfg=feat_cfg, epoch=epoch, stage_key=stage_key,
         )
         w = float(stage_weights.get(stage_key, 0.0))
         total = total + w * loss_s
@@ -655,6 +875,7 @@ def build_unetrpp_inpainting_feature_reconstruction(cfg: Dict[str, Any]) -> UNET
 
 
 def format_feature_recon_config_log(feat_cfg: Mapping[str, Any]) -> str:
+    feat_cfg = apply_objective_preset(dict(feat_cfg or {}))
     version = resolve_feature_recon_version(feat_cfg)
     stages = resolve_feature_stages(feat_cfg)
     stage_weights = resolve_stage_weights(feat_cfg, stages)
@@ -671,17 +892,23 @@ def format_feature_recon_config_log(feat_cfg: Mapping[str, Any]) -> str:
     stages_str = ",".join(str(s) for s in stages)
     loss_kind = resolve_feature_loss_kind(feat_cfg)
     hard_cfg = resolve_hard_token_mining_cfg(feat_cfg)
-    if version in ("v4_hard_stage34_smoothl1", "v4_hard_stage234_smoothl1"):
+    preset = str(feat_cfg.get("objective_preset", "") or "")
+    lam_sched = str(feat_cfg.get("lambda_feature_schedule", "linear_warmup"))
+    if version in ("v4_hard_stage34_smoothl1", "v4_hard_stage234_smoothl1", "v5_adaptive_boundary"):
         loss_w = resolve_feature_loss_weights(feat_cfg)
+        mining_desc = (
+            f"error_mass_fraction={hard_cfg['error_mass_fraction']:g}"
+            if hard_cfg["mode"] == "error_mass"
+            else f"hard_topk_ratio={hard_cfg['topk_ratio']:g}"
+        )
         return (
-            f"[feature-recon-config] version={version} stages=[{stages_str}] "
+            f"[feature-recon-config] version={version} preset={preset or 'none'} stages=[{stages_str}] "
             f"stage_weights={{{w_parts}}} token_mask_mode={token_mask_mode} "
-            f"loss={loss_kind} lambda={lam:g} warmup_epochs={warmup} "
-            f"hard_topk_ratio={hard_cfg['topk_ratio']:g} "
-            f"cosine_weight={loss_w['cosine_weight']:g} "
-            f"smooth_l1_weight={loss_w['smooth_l1_weight']:g} "
-            f"normalize_before_l1={loss_w['normalize_before_l1']} "
-            f"teacher_momentum_base={t_base:g} teacher_momentum_final={t_final:g}"
+            f"loss={loss_kind} lambda={lam:g} lambda_schedule={lam_sched} warmup_epochs={warmup} "
+            f"mining_mode={hard_cfg['mode']} {mining_desc} "
+            f"curriculum_epochs={hard_cfg['curriculum_epochs']} "
+            f"cos_w={loss_w['cosine_weight']:g} smooth_w={loss_w['smooth_l1_weight']:g} "
+            f"teacher_momentum={t_base:g}->{t_final:g}"
         )
     if version == "v4_hard_stage34":
         return (
@@ -699,14 +926,34 @@ def format_feature_recon_config_log(feat_cfg: Mapping[str, Any]) -> str:
     )
 
 
-def lambda_feature_for_epoch(feat_cfg: dict, epoch: int) -> Tuple[float, float]:
+def lambda_feature_for_epoch(
+    feat_cfg: dict,
+    epoch: int,
+    *,
+    total_epochs: Optional[int] = None,
+) -> Tuple[float, float]:
     base = float(feat_cfg.get("lambda_feature", 0.1))
+    schedule = str(feat_cfg.get("lambda_feature_schedule", "linear_warmup")).strip().lower()
     warmup = int(
         feat_cfg.get("warmup_epochs")
         or feat_cfg.get("lambda_feature_warmup_epochs")
         or 0
     )
-    if warmup > 0:
+    if schedule in ("cosine", "cosine_warmup", "cosine_decay"):
+        from dinomim_pytorch.training_schedules import cosine_schedule
+
+        te = int(total_epochs or feat_cfg.get("total_epochs") or 0)
+        if te <= 0:
+            te = max(warmup, epoch + 1)
+        if warmup > 0 and epoch < warmup:
+            now = base * float(epoch + 1) / float(warmup)
+        else:
+            start = base if warmup <= 0 else base
+            end = float(feat_cfg.get("lambda_feature_final", base * 0.5))
+            rem = max(1, te - max(warmup, 0))
+            step = max(0, epoch - max(warmup - 1, 0))
+            now = cosine_schedule(step, rem, start, end)
+    elif warmup > 0:
         now = base * min(1.0, float(epoch + 1) / float(warmup))
     else:
         now = base
@@ -783,21 +1030,6 @@ def save_feature_recon_checkpoint(
         payload["optimizer"] = optimizer.state_dict()
     if global_step is not None:
         payload["global_step"] = global_step
-    try:
-        from dinomim_pytorch.checkpoint_metadata import attach_to_payload, build_metadata, save_sidecar
-
-        exp = dict((cfg or {}).get("experiment") or {})
-        meta = build_metadata(
-            cfg,
-            phase="pretrain",
-            task_name=str(exp.get("task_name") or exp.get("dataset") or "synapse"),
-            model_name=str(exp.get("model") or (cfg.get("model") or {}).get("backbone_name") or "unetrpp"),
-            method="ours",
-        )
-        payload = attach_to_payload(payload, meta)
-        save_sidecar(Path(path), meta)
-    except Exception:
-        pass
     torch.save(payload, str(path))
 
 
